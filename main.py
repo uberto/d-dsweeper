@@ -55,7 +55,7 @@ class Cell:
         self.x = x
         self.y = y
         self.cell_type = cell_type
-        self.state = CellState.HIDDEN
+        self.state = CellState.REVEALED
         self.adjacent_count = 0  # Number of adjacent monsters or treasures
 
     def draw(self, surface):
@@ -92,7 +92,21 @@ class Cell:
 class DungeonMap:
     def __init__(self):
         self.grid = [[Cell(x, y) for x in range(GRID_WIDTH)] for y in range(GRID_HEIGHT)]
+        self.rooms = []  # List to store room information
         self.generate_dungeon()
+
+    def is_room_valid(self, x, y, width, height):
+        """Check if a room can be placed at the given position"""
+        # Add padding of 1 cell for walls and connections
+        padding = 1
+        for cy in range(y - padding, y + height + padding):
+            for cx in range(x - padding, x + width + padding):
+                if not (0 <= cy < GRID_HEIGHT and 0 <= cx < GRID_WIDTH):
+                    return False
+                # Check if this cell is already part of another room
+                if self.grid[cy][cx].cell_type != CellType.WALL:
+                    return False
+        return True
 
     def generate_dungeon(self):
         # Start with all walls
@@ -100,59 +114,130 @@ class DungeonMap:
             for cell in row:
                 cell.cell_type = CellType.WALL
 
-        # Create a central corridor
-        corridor_y = GRID_HEIGHT // 2
-        for x in range(GRID_WIDTH):
-            self.grid[corridor_y][x].cell_type = CellType.FLOOR
-            self.grid[corridor_y][x].state = CellState.REVEALED
-
-        # Add rooms
-        self.add_rooms()
-
-    def add_rooms(self):
-        # Add 4 rooms along the corridor
-        room_positions = [
-            (3, GRID_HEIGHT//2 - 4),  # Top left
-            (12, GRID_HEIGHT//2 - 4),  # Top right
-            (3, GRID_HEIGHT//2 + 1),   # Bottom left
-            (12, GRID_HEIGHT//2 + 1)   # Bottom right
-        ]
-
-        for pos_x, pos_y in room_positions:
-            room_width = 5
-            room_height = 4
-            room_type = random.choice(["monster", "treasure"])
-            
-            # Create room walls
-            for y in range(pos_y - 1, pos_y + room_height + 1):
-                for x in range(pos_x - 1, pos_x + room_width + 1):
-                    if 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH:
-                        self.grid[y][x].cell_type = CellType.WALL
-
-            # Fill room with floor and add content
-            for y in range(pos_y, pos_y + room_height):
-                for x in range(pos_x, pos_x + room_width):
-                    if 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH:
-                        self.grid[y][x].cell_type = CellType.FLOOR
-                        # Add some monsters or treasure
-                        if random.random() < 0.2:  # 20% chance
-                            if room_type == "monster":
-                                self.grid[y][x].cell_type = CellType.MONSTER
-                            else:
-                                self.grid[y][x].cell_type = CellType.TREASURE
-
-            # Add door connecting to corridor
-            door_x = pos_x + room_width // 2
-            door_y = GRID_HEIGHT // 2
-            if pos_y < GRID_HEIGHT // 2:  # Room is above corridor
-                door_y = pos_y + room_height
-            else:  # Room is below corridor
-                door_y = pos_y - 1
-            self.grid[door_y][door_x].cell_type = CellType.DOOR
-            self.grid[door_y][door_x].state = CellState.REVEALED
-
+        # Generate random rooms
+        self.generate_rooms()
+        
+        # Connect rooms with corridors
+        self.connect_rooms()
+        
         # Calculate adjacent counts for floor cells
         self.calculate_adjacent_counts()
+
+    def generate_rooms(self):
+        attempts = 0
+        max_attempts = 50
+        num_rooms = random.randint(4, 6)  # Try to place 4-6 rooms
+        
+        while len(self.rooms) < num_rooms and attempts < max_attempts:
+            # Random room size
+            width = random.randint(4, 7)
+            height = random.randint(4, 6)
+            
+            # Random position
+            x = random.randint(1, GRID_WIDTH - width - 1)
+            y = random.randint(1, GRID_HEIGHT - height - 1)
+            
+            if self.is_room_valid(x, y, width, height):
+                # Decide room type
+                room_type = random.choice([None, "monster", "treasure"])
+                
+                # Create room
+                self.create_room(x, y, width, height, room_type)
+                self.rooms.append({
+                    'x': x,
+                    'y': y,
+                    'width': width,
+                    'height': height,
+                    'type': room_type,
+                    'connected': False
+                })
+            
+            attempts += 1
+
+    def create_room(self, x, y, width, height, room_type):
+        # Create room walls
+        for cy in range(y - 1, y + height + 1):
+            for cx in range(x - 1, x + width + 1):
+                if 0 <= cy < GRID_HEIGHT and 0 <= cx < GRID_WIDTH:
+                    self.grid[cy][cx].cell_type = CellType.WALL
+
+        # Fill room with floor and content
+        for cy in range(y, y + height):
+            for cx in range(x, x + width):
+                self.grid[cy][cx].cell_type = CellType.FLOOR
+                # Add monsters or treasures based on room type
+                if room_type and random.random() < 0.2:  # 20% chance
+                    if room_type == "monster":
+                        self.grid[cy][cx].cell_type = CellType.MONSTER
+                    elif room_type == "treasure":
+                        self.grid[cy][cx].cell_type = CellType.TREASURE
+
+    def connect_rooms(self):
+        if not self.rooms:
+            return
+
+        # Start with the first room as connected
+        self.rooms[0]['connected'] = True
+        
+        while not all(room['connected'] for room in self.rooms):
+            # Find the closest pair of connected and unconnected rooms
+            best_distance = float('inf')
+            best_connection = None
+            
+            for room1 in self.rooms:
+                if not room1['connected']:
+                    continue
+                    
+                for room2 in self.rooms:
+                    if room2['connected']:
+                        continue
+                        
+                    # Calculate center points
+                    c1x = room1['x'] + room1['width'] // 2
+                    c1y = room1['y'] + room1['height'] // 2
+                    c2x = room2['x'] + room2['width'] // 2
+                    c2y = room2['y'] + room2['height'] // 2
+                    
+                    dist = abs(c1x - c2x) + abs(c1y - c2y)
+                    if dist < best_distance:
+                        best_distance = dist
+                        best_connection = (room1, room2, c1x, c1y, c2x, c2y)
+            
+            if best_connection:
+                room1, room2, x1, y1, x2, y2 = best_connection
+                self.create_corridor(x1, y1, x2, y2)
+                room2['connected'] = True
+
+    def create_corridor(self, x1, y1, x2, y2):
+        # First go horizontally, then vertically
+        for x in range(min(x1, x2), max(x1, x2) + 1):
+            self.grid[y1][x].cell_type = CellType.FLOOR
+            # Add doors at corridor intersections with walls
+            if self.is_wall_intersection(x, y1):
+                self.grid[y1][x].cell_type = CellType.DOOR
+                
+        for y in range(min(y1, y2), max(y1, y2) + 1):
+            self.grid[y][x2].cell_type = CellType.FLOOR
+            # Add doors at corridor intersections with walls
+            if self.is_wall_intersection(x2, y):
+                self.grid[y][x2].cell_type = CellType.DOOR
+
+    def is_wall_intersection(self, x, y):
+        """Check if this position is where a corridor meets a room wall"""
+        wall_count = 0
+        floor_count = 0
+        for dy in [-1, 0, 1]:
+            for dx in [-1, 0, 1]:
+                if dx == 0 and dy == 0:
+                    continue
+                new_x, new_y = x + dx, y + dy
+                if 0 <= new_y < GRID_HEIGHT and 0 <= new_x < GRID_WIDTH:
+                    cell_type = self.grid[new_y][new_x].cell_type
+                    if cell_type == CellType.WALL:
+                        wall_count += 1
+                    elif cell_type == CellType.FLOOR:
+                        floor_count += 1
+        return wall_count >= 3 and floor_count >= 2
 
     def calculate_adjacent_counts(self):
         for y in range(GRID_HEIGHT):
