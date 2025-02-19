@@ -9,8 +9,8 @@ from enum import Enum
 pygame.init()
 
 # Constants
-WINDOW_WIDTH = 800
-WINDOW_HEIGHT = 600
+WINDOW_WIDTH = 1200
+WINDOW_HEIGHT = 800
 BUTTON_WIDTH = 200
 BUTTON_HEIGHT = 50
 QR_SIZE = 150  # Size of the QR code display
@@ -18,9 +18,9 @@ QR_MODULES = 21  # Number of modules (cells) in the QR code
 MODULE_SIZE = QR_SIZE // QR_MODULES
 
 # Game Grid Constants
-CELL_SIZE = 30
-GRID_WIDTH = 20
-GRID_HEIGHT = 15
+CELL_SIZE = 20  # Reduced from 25 to fit more cells
+GRID_WIDTH = 50  # Increased from 40
+GRID_HEIGHT = 35  # Increased from 30
 GRID_OFFSET_X = (WINDOW_WIDTH - GRID_WIDTH * CELL_SIZE) // 2
 GRID_OFFSET_Y = (WINDOW_HEIGHT - GRID_HEIGHT * CELL_SIZE) // 2
 
@@ -95,17 +95,38 @@ class DungeonMap:
         self.rooms = []  # List to store room information
         self.generate_dungeon()
 
-    def is_room_valid(self, x, y, width, height):
+    def is_room_valid(self, x, y, width, height, room_type):
         """Check if a room can be placed at the given position"""
-        # Add padding of 1 cell for walls and connections
-        padding = 1
-        for cy in range(y - padding, y + height + padding):
-            for cx in range(x - padding, x + width + padding):
+        # Ensure room is at least 1 cell away from map borders
+        if x < 2 or y < 2 or x + width > GRID_WIDTH - 2 or y + height > GRID_HEIGHT - 2:
+            return False
+
+        # For overlapping rooms, only allow if they are of the same type
+        overlapping_room_found = False
+        overlapping_type = None
+        
+        for cy in range(y - 1, y + height + 1):
+            for cx in range(x - 1, x + width + 1):
                 if not (0 <= cy < GRID_HEIGHT and 0 <= cx < GRID_WIDTH):
                     return False
                 # Check if this cell is already part of another room
                 if self.grid[cy][cx].cell_type != CellType.WALL:
-                    return False
+                    # Find the overlapping room
+                    for room in self.rooms:
+                        if (room['x'] <= cx <= room['x'] + room['width'] - 1 and 
+                            room['y'] <= cy <= room['y'] + room['height'] - 1):
+                            if not overlapping_room_found:
+                                overlapping_room_found = True
+                                overlapping_type = room['type']
+                            elif room['type'] != overlapping_type:
+                                # Found a second room of different type
+                                return False
+                            break
+                    
+                    # If we found an overlapping room of different type, reject
+                    if overlapping_room_found and overlapping_type != room_type:
+                        return False
+        
         return True
 
     def generate_dungeon(self):
@@ -125,22 +146,63 @@ class DungeonMap:
 
     def generate_rooms(self):
         attempts = 0
-        max_attempts = 50
-        num_rooms = random.randint(4, 6)  # Try to place 4-6 rooms
+        max_attempts = 1000
+        min_rooms = 40
+        max_rooms = 60
+        num_rooms = random.randint(min_rooms, max_rooms)
+        
+        # Calculate room type distribution (2:1 ratio of monster:treasure)
+        num_treasure = num_rooms // 3
+        num_monster = num_rooms - num_treasure
+        
+        # Create room type list with 2:1 ratio
+        room_types = (["monster"] * num_monster + ["treasure"] * num_treasure)
+        random.shuffle(room_types)
+        
+        # Ensure at least 3 treasure rooms and 6 monster rooms at the start
+        start_rooms = ["treasure", "treasure", "treasure"] + ["monster"] * 6
+        room_types = start_rooms + room_types[9:]
+        random.shuffle(room_types)
+        
+        # Divide map into sectors for room placement
+        sectors = [(x, y) for x in range(4) for y in range(3)]
+        random.shuffle(sectors)
+        sector_width = (GRID_WIDTH - 4) // 4
+        sector_height = (GRID_HEIGHT - 4) // 3
+        
+        sector_index = 0
+        consecutive_failures = 0
+        max_consecutive_failures = 5  # Number of failures before reducing room size
+        current_max_size = 12  # Start with maximum room size
         
         while len(self.rooms) < num_rooms and attempts < max_attempts:
-            # Random room size
-            width = random.randint(4, 7)
-            height = random.randint(4, 6)
+            # Get current sector
+            if sector_index >= len(sectors):
+                random.shuffle(sectors)
+                sector_index = 0
+            sector_x, sector_y = sectors[sector_index]
             
-            # Random position
-            x = random.randint(1, GRID_WIDTH - width - 1)
-            y = random.randint(1, GRID_HEIGHT - height - 1)
+            # Calculate room position within sector
+            base_x = 2 + sector_x * sector_width
+            base_y = 2 + sector_y * sector_height
             
-            if self.is_room_valid(x, y, width, height):
-                # Decide room type
-                room_type = random.choice([None, "monster", "treasure"])
-                
+            # Adjust maximum room size based on consecutive failures
+            if consecutive_failures >= max_consecutive_failures:
+                current_max_size = max(4, current_max_size - 1)  # Reduce size but not below 4
+                consecutive_failures = 0  # Reset counter
+            
+            # Random room size (4 to current_max_size)
+            width = random.randint(4, min(current_max_size, sector_width - 1))
+            height = random.randint(4, min(current_max_size, sector_height - 1))
+            
+            # Random position within sector (with padding for merging)
+            x = random.randint(base_x - 2, base_x + sector_width - width + 2)
+            y = random.randint(base_y - 2, base_y + sector_height - height + 2)
+            
+            # Get room type from our prepared list
+            room_type = room_types[len(self.rooms)]
+            
+            if self.is_room_valid(x, y, width, height, room_type):
                 # Create room
                 self.create_room(x, y, width, height, room_type)
                 self.rooms.append({
@@ -149,46 +211,90 @@ class DungeonMap:
                     'width': width,
                     'height': height,
                     'type': room_type,
-                    'connected': False
+                    'connected': False,
+                    'doors': []
                 })
+                sector_index += 1
+                consecutive_failures = 0  # Reset on success
+                current_max_size = min(12, current_max_size + 1)  # Try to increase size again
+            else:
+                consecutive_failures += 1
             
             attempts += 1
 
     def create_room(self, x, y, width, height, room_type):
-        # Create room walls
+        # Create room walls only where there isn't already a floor
         for cy in range(y - 1, y + height + 1):
             for cx in range(x - 1, x + width + 1):
                 if 0 <= cy < GRID_HEIGHT and 0 <= cx < GRID_WIDTH:
-                    self.grid[cy][cx].cell_type = CellType.WALL
+                    # Only place wall if the cell isn't already a floor or special cell
+                    current_type = self.grid[cy][cx].cell_type
+                    if current_type == CellType.WALL:
+                        self.grid[cy][cx].cell_type = CellType.WALL
 
-        # Fill room with floor and content
+        # Calculate content placement with reduced density
+        room_area = width * height
+        # Significantly reduced content density
+        min_content = max(1, room_area // 25)  # Was 15
+        max_content = max(2, room_area // 20)  # Was 10
+        num_content = random.randint(min_content, max_content)
+        
+        # Get all possible floor positions
+        floor_positions = []
         for cy in range(y, y + height):
             for cx in range(x, x + width):
+                current_type = self.grid[cy][cx].cell_type
+                if current_type not in [CellType.MONSTER, CellType.TREASURE]:
+                    floor_positions.append((cx, cy))
+        
+        # Place content in random positions
+        for _ in range(num_content):
+            if floor_positions:
+                cx, cy = random.choice(floor_positions)
+                floor_positions.remove((cx, cy))
+                self.grid[cy][cx].cell_type = (CellType.MONSTER if room_type == "monster" 
+                                             else CellType.TREASURE)
+        
+        # Fill remaining positions with floor
+        for cx, cy in floor_positions:
+            if self.grid[cy][cx].cell_type == CellType.WALL:  # Only convert walls to floor
                 self.grid[cy][cx].cell_type = CellType.FLOOR
-                # Add monsters or treasures based on room type
-                if room_type and random.random() < 0.2:  # 20% chance
-                    if room_type == "monster":
-                        self.grid[cy][cx].cell_type = CellType.MONSTER
-                    elif room_type == "treasure":
-                        self.grid[cy][cx].cell_type = CellType.TREASURE
 
     def connect_rooms(self):
         if not self.rooms:
             return
 
+        # Separate rooms by type
+        monster_rooms = [room for room in self.rooms if room['type'] == "monster"]
+        treasure_rooms = [room for room in self.rooms if room['type'] == "treasure"]
+
+        # Connect monster rooms
+        if monster_rooms:
+            self._connect_room_network(monster_rooms, "monster")
+
+        # Connect treasure rooms
+        if treasure_rooms:
+            self._connect_room_network(treasure_rooms, "treasure")
+
+    def _connect_room_network(self, rooms, room_type):
+        """Connect all rooms of the same type together"""
+        if not rooms:
+            return
+
         # Start with the first room as connected
-        self.rooms[0]['connected'] = True
+        rooms[0]['connected'] = True
         
-        while not all(room['connected'] for room in self.rooms):
+        # Keep connecting until all rooms are connected
+        while not all(room['connected'] for room in rooms):
             # Find the closest pair of connected and unconnected rooms
             best_distance = float('inf')
             best_connection = None
             
-            for room1 in self.rooms:
+            for room1 in rooms:
                 if not room1['connected']:
                     continue
                     
-                for room2 in self.rooms:
+                for room2 in rooms:
                     if room2['connected']:
                         continue
                         
@@ -205,39 +311,35 @@ class DungeonMap:
             
             if best_connection:
                 room1, room2, x1, y1, x2, y2 = best_connection
-                self.create_corridor(x1, y1, x2, y2)
+                self.create_corridor(x1, y1, x2, y2, room_type)
                 room2['connected'] = True
 
-    def create_corridor(self, x1, y1, x2, y2):
+    def create_corridor(self, x1, y1, x2, y2, room_type):
+        """Create a corridor between two points"""
         # First go horizontally, then vertically
-        for x in range(min(x1, x2), max(x1, x2) + 1):
-            self.grid[y1][x].cell_type = CellType.FLOOR
-            # Add doors at corridor intersections with walls
-            if self.is_wall_intersection(x, y1):
-                self.grid[y1][x].cell_type = CellType.DOOR
-                
-        for y in range(min(y1, y2), max(y1, y2) + 1):
-            self.grid[y][x2].cell_type = CellType.FLOOR
-            # Add doors at corridor intersections with walls
-            if self.is_wall_intersection(x2, y):
-                self.grid[y][x2].cell_type = CellType.DOOR
-
-    def is_wall_intersection(self, x, y):
-        """Check if this position is where a corridor meets a room wall"""
-        wall_count = 0
-        floor_count = 0
-        for dy in [-1, 0, 1]:
-            for dx in [-1, 0, 1]:
-                if dx == 0 and dy == 0:
-                    continue
-                new_x, new_y = x + dx, y + dy
-                if 0 <= new_y < GRID_HEIGHT and 0 <= new_x < GRID_WIDTH:
-                    cell_type = self.grid[new_y][new_x].cell_type
-                    if cell_type == CellType.WALL:
-                        wall_count += 1
-                    elif cell_type == CellType.FLOOR:
-                        floor_count += 1
-        return wall_count >= 3 and floor_count >= 2
+        current_x = x1
+        current_y = y1
+        
+        # All corridors are doors (brown color)
+        corridor_type = CellType.DOOR
+        
+        # Place corridor at start
+        if self.grid[y1][x1].cell_type == CellType.WALL:
+            self.grid[y1][x1].cell_type = corridor_type
+        
+        # Horizontal movement
+        while current_x != x2:
+            step = 1 if x2 > current_x else -1
+            current_x += step
+            if self.grid[current_y][current_x].cell_type == CellType.WALL:
+                self.grid[current_y][current_x].cell_type = corridor_type
+        
+        # Vertical movement
+        while current_y != y2:
+            step = 1 if y2 > current_y else -1
+            current_y += step
+            if self.grid[current_y][current_x].cell_type == CellType.WALL:
+                self.grid[current_y][current_x].cell_type = corridor_type
 
     def calculate_adjacent_counts(self):
         for y in range(GRID_HEIGHT):
