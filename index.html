@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>D&D Sweeper</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background-color: #f0f0f0;
+        }
+    </style>
+</head>
+<body>
+    <script src="https://cdn.jsdelivr.net/gh/pygame-web/pygbag@0.8.2/pygbag-static.js"></script>
+    <script>
+        const pygbagArgs = [
+            "--title", "D&D Sweeper",
+            "--ume_block", "0",
+            "--app_name", "d-dsweeper",
+            "--can_close", "1",
+            "--archive", "main",
+        ];
+        _pygbag.run(".", pygbagArgs);
+    </script>
+</body>
+</html> 
