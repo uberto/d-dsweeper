@@ -2,6 +2,8 @@ import pygame
 import asyncio
 import platform
 import hashlib
+import random
+from enum import Enum
 
 # Initialize Pygame
 pygame.init()
@@ -15,10 +17,195 @@ QR_SIZE = 150  # Size of the QR code display
 QR_MODULES = 21  # Number of modules (cells) in the QR code
 MODULE_SIZE = QR_SIZE // QR_MODULES
 
+# Game Grid Constants
+CELL_SIZE = 30
+GRID_WIDTH = 20
+GRID_HEIGHT = 15
+GRID_OFFSET_X = (WINDOW_WIDTH - GRID_WIDTH * CELL_SIZE) // 2
+GRID_OFFSET_Y = (WINDOW_HEIGHT - GRID_HEIGHT * CELL_SIZE) // 2
+
 # Colors
 WHITE = (255, 255, 255)
 BLACK = (0, 0, 0)
 GRAY = (128, 128, 128)
+BROWN = (139, 69, 19)
+DARK_GRAY = (64, 64, 64)
+LIGHT_BROWN = (205, 133, 63)
+GOLD = (255, 215, 0)
+RED = (255, 0, 0)
+
+# Game States
+WELCOME_SCREEN = "welcome"
+GAME_SCREEN = "game"
+
+class CellType(Enum):
+    WALL = "wall"
+    FLOOR = "floor"
+    DOOR = "door"
+    MONSTER = "monster"
+    TREASURE = "treasure"
+
+class CellState(Enum):
+    HIDDEN = "hidden"
+    REVEALED = "revealed"
+    FLAGGED = "flagged"
+
+class Cell:
+    def __init__(self, x, y, cell_type=CellType.WALL):
+        self.x = x
+        self.y = y
+        self.cell_type = cell_type
+        self.state = CellState.HIDDEN
+        self.adjacent_count = 0  # Number of adjacent monsters or treasures
+
+    def draw(self, surface):
+        rect = pygame.Rect(
+            GRID_OFFSET_X + self.x * CELL_SIZE,
+            GRID_OFFSET_Y + self.y * CELL_SIZE,
+            CELL_SIZE,
+            CELL_SIZE
+        )
+        
+        # Draw the cell based on its state
+        if self.state == CellState.HIDDEN:
+            pygame.draw.rect(surface, GRAY, rect)
+            pygame.draw.rect(surface, DARK_GRAY, rect, 1)
+        elif self.state == CellState.REVEALED:
+            if self.cell_type == CellType.WALL:
+                pygame.draw.rect(surface, DARK_GRAY, rect)
+            elif self.cell_type == CellType.FLOOR:
+                pygame.draw.rect(surface, LIGHT_BROWN, rect)
+                if self.adjacent_count > 0:
+                    font = pygame.font.Font(None, 24)
+                    text = font.render(str(self.adjacent_count), True, BLACK)
+                    text_rect = text.get_rect(center=rect.center)
+                    surface.blit(text, text_rect)
+            elif self.cell_type == CellType.DOOR:
+                pygame.draw.rect(surface, BROWN, rect)
+            elif self.cell_type == CellType.MONSTER:
+                pygame.draw.rect(surface, RED, rect)
+            elif self.cell_type == CellType.TREASURE:
+                pygame.draw.rect(surface, GOLD, rect)
+        
+        pygame.draw.rect(surface, BLACK, rect, 1)
+
+class DungeonMap:
+    def __init__(self):
+        self.grid = [[Cell(x, y) for x in range(GRID_WIDTH)] for y in range(GRID_HEIGHT)]
+        self.generate_dungeon()
+
+    def generate_dungeon(self):
+        # Start with all walls
+        for row in self.grid:
+            for cell in row:
+                cell.cell_type = CellType.WALL
+
+        # Create a central corridor
+        corridor_y = GRID_HEIGHT // 2
+        for x in range(GRID_WIDTH):
+            self.grid[corridor_y][x].cell_type = CellType.FLOOR
+            self.grid[corridor_y][x].state = CellState.REVEALED
+
+        # Add rooms
+        self.add_rooms()
+
+    def add_rooms(self):
+        # Add 4 rooms along the corridor
+        room_positions = [
+            (3, GRID_HEIGHT//2 - 4),  # Top left
+            (12, GRID_HEIGHT//2 - 4),  # Top right
+            (3, GRID_HEIGHT//2 + 1),   # Bottom left
+            (12, GRID_HEIGHT//2 + 1)   # Bottom right
+        ]
+
+        for pos_x, pos_y in room_positions:
+            room_width = 5
+            room_height = 4
+            room_type = random.choice(["monster", "treasure"])
+            
+            # Create room walls
+            for y in range(pos_y - 1, pos_y + room_height + 1):
+                for x in range(pos_x - 1, pos_x + room_width + 1):
+                    if 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH:
+                        self.grid[y][x].cell_type = CellType.WALL
+
+            # Fill room with floor and add content
+            for y in range(pos_y, pos_y + room_height):
+                for x in range(pos_x, pos_x + room_width):
+                    if 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH:
+                        self.grid[y][x].cell_type = CellType.FLOOR
+                        # Add some monsters or treasure
+                        if random.random() < 0.2:  # 20% chance
+                            if room_type == "monster":
+                                self.grid[y][x].cell_type = CellType.MONSTER
+                            else:
+                                self.grid[y][x].cell_type = CellType.TREASURE
+
+            # Add door connecting to corridor
+            door_x = pos_x + room_width // 2
+            door_y = GRID_HEIGHT // 2
+            if pos_y < GRID_HEIGHT // 2:  # Room is above corridor
+                door_y = pos_y + room_height
+            else:  # Room is below corridor
+                door_y = pos_y - 1
+            self.grid[door_y][door_x].cell_type = CellType.DOOR
+            self.grid[door_y][door_x].state = CellState.REVEALED
+
+        # Calculate adjacent counts for floor cells
+        self.calculate_adjacent_counts()
+
+    def calculate_adjacent_counts(self):
+        for y in range(GRID_HEIGHT):
+            for x in range(GRID_WIDTH):
+                if self.grid[y][x].cell_type == CellType.FLOOR:
+                    count = 0
+                    # Check all 8 adjacent cells
+                    for dy in [-1, 0, 1]:
+                        for dx in [-1, 0, 1]:
+                            if dx == 0 and dy == 0:
+                                continue
+                            new_x, new_y = x + dx, y + dy
+                            if 0 <= new_y < GRID_HEIGHT and 0 <= new_x < GRID_WIDTH:
+                                cell_type = self.grid[new_y][new_x].cell_type
+                                if cell_type in [CellType.MONSTER, CellType.TREASURE]:
+                                    count += 1
+                    self.grid[y][x].adjacent_count = count
+
+    def draw(self, surface):
+        for row in self.grid:
+            for cell in row:
+                cell.draw(surface)
+
+    def handle_click(self, pos):
+        # Convert screen coordinates to grid coordinates
+        grid_x = (pos[0] - GRID_OFFSET_X) // CELL_SIZE
+        grid_y = (pos[1] - GRID_OFFSET_Y) // CELL_SIZE
+        
+        if 0 <= grid_y < GRID_HEIGHT and 0 <= grid_x < GRID_WIDTH:
+            cell = self.grid[grid_y][grid_x]
+            if cell.state == CellState.HIDDEN:
+                cell.state = CellState.REVEALED
+                if cell.cell_type == CellType.FLOOR:
+                    self.flood_fill_reveal(grid_x, grid_y)
+
+    def flood_fill_reveal(self, x, y):
+        """Reveal connected floor cells with no adjacent monsters/treasures"""
+        if not (0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH):
+            return
+        
+        cell = self.grid[y][x]
+        if cell.state == CellState.REVEALED or cell.cell_type == CellType.WALL:
+            return
+            
+        cell.state = CellState.REVEALED
+        
+        # If it's a floor cell with no adjacent monsters/treasures, reveal neighbors
+        if cell.cell_type == CellType.FLOOR and cell.adjacent_count == 0:
+            for dy in [-1, 0, 1]:
+                for dx in [-1, 0, 1]:
+                    if dx == 0 and dy == 0:
+                        continue
+                    self.flood_fill_reveal(x + dx, y + dy)
 
 # Create the window
 screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
@@ -107,52 +294,69 @@ class Button:
                 return True
         return False
 
+class Game:
+    def __init__(self):
+        self.state = WELCOME_SCREEN
+        self.setup_welcome_screen()
+        self.setup_game_screen()
+
+    def setup_welcome_screen(self):
+        self.start_button = Button(
+            WINDOW_WIDTH // 2 - BUTTON_WIDTH // 2,
+            WINDOW_HEIGHT // 2,
+            BUTTON_WIDTH,
+            BUTTON_HEIGHT,
+            "Start Game"
+        )
+        self.title_font = pygame.font.Font(None, 48)
+        self.title_text = self.title_font.render("Welcome to D&D Sweeper", True, BLACK)
+        self.title_rect = self.title_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 3))
+
+        # URL setup for QR code
+        self.url_font = pygame.font.Font(None, 24)
+        self.url = "http://localhost:8000"  # Default URL
+        self.url_text = self.url_font.render(self.url, True, BLACK)
+        self.url_rect = self.url_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 50))
+        
+        # QR code position
+        self.qr_x = WINDOW_WIDTH // 2 - QR_SIZE // 2
+        self.qr_y = WINDOW_HEIGHT - 150 - QR_SIZE // 2
+
+    def setup_game_screen(self):
+        self.dungeon_map = DungeonMap()
+
+    def handle_event(self, event):
+        if self.state == WELCOME_SCREEN:
+            if self.start_button.handle_event(event):
+                self.state = GAME_SCREEN
+        elif self.state == GAME_SCREEN:
+            if event.type == pygame.MOUSEBUTTONDOWN:
+                self.dungeon_map.handle_click(event.pos)
+
+    def draw(self):
+        screen.fill(WHITE)
+        
+        if self.state == WELCOME_SCREEN:
+            # Draw welcome screen with QR code
+            screen.blit(self.title_text, self.title_rect)
+            self.start_button.draw(screen)
+            draw_qr_pattern(screen, self.qr_x, self.qr_y, self.url)
+            screen.blit(self.url_text, self.url_rect)
+        elif self.state == GAME_SCREEN:
+            self.dungeon_map.draw(screen)
+
 async def main():
-    # Create start button
-    start_button = Button(
-        WINDOW_WIDTH // 2 - BUTTON_WIDTH // 2,
-        WINDOW_HEIGHT // 2,
-        BUTTON_WIDTH,
-        BUTTON_HEIGHT,
-        "Start Game"
-    )
-
-    # Title font
-    title_font = pygame.font.Font(None, 48)
-    title_text = title_font.render("Welcome to D&D Sweeper", True, BLACK)
-    title_rect = title_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT // 3))
-
-    # URL setup
-    url_font = pygame.font.Font(None, 24)
-    url = "http://localhost:8000"  # Default URL
-    url_text = url_font.render(url, True, BLACK)
-    url_rect = url_text.get_rect(center=(WINDOW_WIDTH // 2, WINDOW_HEIGHT - 50))
-
-    # QR code position
-    qr_x = WINDOW_WIDTH // 2 - QR_SIZE // 2
-    qr_y = WINDOW_HEIGHT - 150 - QR_SIZE // 2
-
+    game = Game()
+    
     running = True
     while running:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
             
-            if start_button.handle_event(event):
-                print("Start button clicked!")  # For now, just print to console
+            game.handle_event(event)
 
-        screen.fill(WHITE)
-        
-        # Draw title
-        screen.blit(title_text, title_rect)
-        
-        # Draw button
-        start_button.draw(screen)
-        
-        # Draw QR code and URL
-        draw_qr_pattern(screen, qr_x, qr_y, url)
-        screen.blit(url_text, url_rect)
-        
+        game.draw()
         pygame.display.flip()
         await asyncio.sleep(0)
 
