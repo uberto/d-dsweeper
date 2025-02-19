@@ -30,6 +30,8 @@ http://localhost:8000
 
 The game will be compiled to WebAssembly and served through the browser. You might need to wait a few seconds for the compilation process to complete.
 
+For easy mobile access, the game displays a QR code that you can scan with your smartphone to quickly open the game in your mobile browser. The QR code contains the local network URL of the game.
+
 ## Deployment to GitHub Pages
 
 1. Push your changes to GitHub:
@@ -53,4 +55,5 @@ git push origin main
 
 - Welcome screen with title
 - Interactive "Start Game" button
+- QR code for easy mobile access
 - Web browser compatibility through Pygbag
