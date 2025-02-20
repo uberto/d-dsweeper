@@ -33,6 +33,7 @@ DARK_GRAY = (64, 64, 64)
 LIGHT_BROWN = (205, 133, 63)
 GOLD = (255, 215, 0)
 RED = (255, 0, 0)
+VERY_LIGHT_GRAY = (220, 220, 220)  # Made darker (was 240,240,240)
 
 # Game States
 WELCOME_SCREEN = "welcome"
@@ -49,14 +50,16 @@ class CellState(Enum):
     HIDDEN = "hidden"
     REVEALED = "revealed"
     FLAGGED = "flagged"
+    ROOM_WALL = "room_wall"  # New state for visible room walls
 
 class Cell:
     def __init__(self, x, y, cell_type=CellType.WALL):
         self.x = x
         self.y = y
         self.cell_type = cell_type
-        self.state = CellState.REVEALED
-        self.adjacent_count = 0  # Number of adjacent monsters or treasures
+        self.state = CellState.HIDDEN
+        self.adjacent_count = 0
+        self.in_visible_room = False  # Track if cell is in a visible room
 
     def draw(self, surface):
         rect = pygame.Rect(
@@ -68,13 +71,18 @@ class Cell:
         
         # Draw the cell based on its state
         if self.state == CellState.HIDDEN:
-            pygame.draw.rect(surface, GRAY, rect)
-            pygame.draw.rect(surface, DARK_GRAY, rect, 1)
+            if self.in_visible_room:
+                pygame.draw.rect(surface, GRAY, rect)  # Use gray for hidden cells in visible rooms
+                pygame.draw.rect(surface, DARK_GRAY, rect, 1)
+            else:
+                pygame.draw.rect(surface, BLACK, rect)  # Keep black for truly hidden cells
+        elif self.state == CellState.ROOM_WALL:
+            pygame.draw.rect(surface, DARK_GRAY, rect)
         elif self.state == CellState.REVEALED:
             if self.cell_type == CellType.WALL:
                 pygame.draw.rect(surface, DARK_GRAY, rect)
             elif self.cell_type == CellType.FLOOR:
-                pygame.draw.rect(surface, LIGHT_BROWN, rect)
+                pygame.draw.rect(surface, VERY_LIGHT_GRAY, rect)
                 if self.adjacent_count > 0:
                     font = pygame.font.Font(None, 24)
                     text = font.render(str(self.adjacent_count), True, BLACK)
@@ -87,13 +95,99 @@ class Cell:
             elif self.cell_type == CellType.TREASURE:
                 pygame.draw.rect(surface, GOLD, rect)
         
-        pygame.draw.rect(surface, BLACK, rect, 1)
+        if self.state != CellState.HIDDEN or self.in_visible_room:  # Draw borders for visible room cells
+            pygame.draw.rect(surface, BLACK, rect, 1)
 
 class DungeonMap:
     def __init__(self):
         self.grid = [[Cell(x, y) for x in range(GRID_WIDTH)] for y in range(GRID_HEIGHT)]
-        self.rooms = []  # List to store room information
+        self.rooms = []
+        self.game_over = False
         self.generate_dungeon()
+        self.reveal_all_walls()  # Reveal walls before showing initial room
+        self.reveal_initial_room()
+
+    def reveal_all_walls(self):
+        """Reveal all walls in the dungeon from the start"""
+        for y in range(GRID_HEIGHT):
+            for x in range(GRID_WIDTH):
+                if self.grid[y][x].cell_type == CellType.WALL:
+                    self.grid[y][x].state = CellState.REVEALED
+
+    def reveal_initial_room(self):
+        """Reveal a random treasure room at the start of the game"""
+        treasure_rooms = [room for room in self.rooms if room['type'] == "treasure"]
+        if treasure_rooms:
+            start_room = random.choice(treasure_rooms)
+            self.mark_room_visible(start_room)
+
+    def mark_room_visible(self, room):
+        """Mark all cells in a room as visible"""
+        # Mark all cells in the room as visible
+        for y in range(room['y'] - 1, room['y'] + room['height'] + 1):
+            for x in range(room['x'] - 1, room['x'] + room['width'] + 1):
+                if 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH:
+                    self.grid[y][x].in_visible_room = True
+                    if self.grid[y][x].cell_type == CellType.WALL:
+                        self.grid[y][x].state = CellState.ROOM_WALL
+
+    def handle_click(self, pos):
+        if self.game_over:
+            return
+
+        grid_x = (pos[0] - GRID_OFFSET_X) // CELL_SIZE
+        grid_y = (pos[1] - GRID_OFFSET_Y) // CELL_SIZE
+        
+        if 0 <= grid_y < GRID_HEIGHT and 0 <= grid_x < GRID_WIDTH:
+            cell = self.grid[grid_y][grid_x]
+            if cell.state in [CellState.HIDDEN, CellState.ROOM_WALL]:
+                # Check if clicked on a monster
+                if cell.cell_type == CellType.MONSTER:
+                    cell.state = CellState.REVEALED
+                    self.game_over = True
+                    self.reveal_all()
+                else:
+                    # Start flood fill from clicked cell
+                    self.flood_fill_reveal(grid_x, grid_y)
+                    # Find and mark the room as visible
+                    for room in self.rooms:
+                        if (room['x'] <= grid_x < room['x'] + room['width'] and 
+                            room['y'] <= grid_y < room['y'] + room['height']):
+                            self.mark_room_visible(room)
+                            break
+
+    def reveal_room(self, room):
+        """Reveal all cells in a room"""
+        for y in range(room['y'], room['y'] + room['height']):
+            for x in range(room['x'], room['x'] + room['width']):
+                if 0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH:
+                    cell = self.grid[y][x]
+                    cell.state = CellState.REVEALED
+                    # If it's a floor cell, check for connected areas
+                    if cell.cell_type == CellType.FLOOR:
+                        self.flood_fill_reveal(x, y)
+
+    def reveal_room_walls(self, x, y):
+        """Reveal walls around the room containing the given coordinates"""
+        # Find which room contains these coordinates
+        for room in self.rooms:
+            if (room['x'] <= x < room['x'] + room['width'] and 
+                room['y'] <= y < room['y'] + room['height']):
+                # Show walls of this room and one tile beyond to ensure complete visibility
+                for cy in range(room['y'] - 2, room['y'] + room['height'] + 2):
+                    for cx in range(room['x'] - 2, room['x'] + room['width'] + 2):
+                        if 0 <= cy < GRID_HEIGHT and 0 <= cx < GRID_WIDTH:
+                            cell = self.grid[cy][cx]
+                            if cell.cell_type == CellType.WALL:
+                                if cell.state == CellState.HIDDEN:
+                                    cell.state = CellState.ROOM_WALL
+                break
+
+    def reveal_all(self):
+        """Reveal all cells when game is over"""
+        for row in self.grid:
+            for cell in row:
+                cell.state = CellState.REVEALED
 
     def is_room_valid(self, x, y, width, height, room_type):
         """Check if a room can be placed at the given position"""
@@ -363,36 +457,40 @@ class DungeonMap:
             for cell in row:
                 cell.draw(surface)
 
-    def handle_click(self, pos):
-        # Convert screen coordinates to grid coordinates
-        grid_x = (pos[0] - GRID_OFFSET_X) // CELL_SIZE
-        grid_y = (pos[1] - GRID_OFFSET_Y) // CELL_SIZE
-        
-        if 0 <= grid_y < GRID_HEIGHT and 0 <= grid_x < GRID_WIDTH:
-            cell = self.grid[grid_y][grid_x]
-            if cell.state == CellState.HIDDEN:
-                cell.state = CellState.REVEALED
-                if cell.cell_type == CellType.FLOOR:
-                    self.flood_fill_reveal(grid_x, grid_y)
-
     def flood_fill_reveal(self, x, y):
-        """Reveal connected floor cells with no adjacent monsters/treasures"""
+        """Reveal connected floor cells within the current room until hitting numbered cells or walls"""
         if not (0 <= y < GRID_HEIGHT and 0 <= x < GRID_WIDTH):
             return
         
         cell = self.grid[y][x]
-        if cell.state == CellState.REVEALED or cell.cell_type == CellType.WALL:
+        if cell.state == CellState.REVEALED or cell.cell_type == CellType.WALL or cell.cell_type == CellType.DOOR:
             return
             
+        # Reveal the current cell
         cell.state = CellState.REVEALED
         
-        # If it's a floor cell with no adjacent monsters/treasures, reveal neighbors
+        # If it's a floor cell with no adjacent monsters/treasures, continue flood fill within the room
         if cell.cell_type == CellType.FLOOR and cell.adjacent_count == 0:
             for dy in [-1, 0, 1]:
                 for dx in [-1, 0, 1]:
                     if dx == 0 and dy == 0:
                         continue
-                    self.flood_fill_reveal(x + dx, y + dy)
+                    
+                    new_x, new_y = x + dx, y + dy
+                    if not (0 <= new_y < GRID_HEIGHT and 0 <= new_x < GRID_WIDTH):
+                        continue
+                        
+                    next_cell = self.grid[new_y][new_x]
+                    # Continue flood fill if:
+                    # 1. Cell is not a wall or door
+                    # 2. Cell is not already revealed
+                    # 3. Cell is a floor
+                    if (next_cell.cell_type == CellType.FLOOR and 
+                        next_cell.state != CellState.REVEALED):
+                        self.flood_fill_reveal(new_x, new_y)
+        # If it's a floor cell with adjacent monsters/treasures, reveal it but don't continue flood fill
+        elif cell.cell_type == CellType.FLOOR and cell.adjacent_count > 0:
+            cell.state = CellState.REVEALED
 
 # Create the window
 screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
@@ -486,6 +584,7 @@ class Game:
         self.state = WELCOME_SCREEN
         self.setup_welcome_screen()
         self.setup_game_screen()
+        self.game_over_font = pygame.font.Font(None, 72)
 
     def setup_welcome_screen(self):
         self.start_button = Button(
@@ -524,13 +623,18 @@ class Game:
         screen.fill(WHITE)
         
         if self.state == WELCOME_SCREEN:
-            # Draw welcome screen with QR code
             screen.blit(self.title_text, self.title_rect)
             self.start_button.draw(screen)
             draw_qr_pattern(screen, self.qr_x, self.qr_y, self.url)
             screen.blit(self.url_text, self.url_rect)
         elif self.state == GAME_SCREEN:
             self.dungeon_map.draw(screen)
+            
+            # Draw game over message if applicable
+            if self.dungeon_map.game_over:
+                text = self.game_over_font.render("Game Over!", True, RED)
+                text_rect = text.get_rect(center=(WINDOW_WIDTH // 2, 50))
+                screen.blit(text, text_rect)
 
 async def main():
     game = Game()
